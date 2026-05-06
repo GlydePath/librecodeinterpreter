@@ -390,6 +390,8 @@ class SandboxPool:
             nsjail_cmd = " ".join(
                 shlex.quote(str(a)) for a in [settings.nsjail_binary] + nsjail_args
             )
+            tmpfs_size = settings.sandbox_tmpfs_size_mb
+
             wrapper_cmd = (
                 # Bind sandbox dir to /mnt/data (before hiding sandboxes dir)
                 f"mount --bind {shlex.quote(str(sandbox_info.data_dir))} /mnt/data && "
@@ -404,7 +406,9 @@ class SandboxPool:
                 f"mount -t tmpfs -o size=1k tmpfs /app/dashboard && "
                 f"mount -t tmpfs -o size=1k tmpfs /app/src && "
                 # BUG-003: Hide /proc (REPL is Python-only, always safe to mask)
-                f"mount --bind /tmp/empty_proc /proc && "
+                f"mount --bind /var/lib/code-interpreter/empty_proc /proc && "
+                # BUG-007: Ephemeral /tmp — prevent cross-session data persistence
+                f"mount -t tmpfs -o size={tmpfs_size}m,mode=1777 tmpfs /tmp && "
                 # Execute nsjail
                 f"{nsjail_cmd}"
             )

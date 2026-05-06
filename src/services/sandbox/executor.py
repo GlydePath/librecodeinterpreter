@@ -103,7 +103,11 @@ class SandboxExecutor:
             if lang in ("java", "rs", "bash"):
                 proc_mask = ""
             else:
-                proc_mask = "mount --bind /tmp/empty_proc /proc && "
+                proc_mask = (
+                    "mount --bind /var/lib/code-interpreter/empty_proc /proc && "
+                )
+
+            tmpfs_size = settings.sandbox_tmpfs_size_mb
 
             wrapper_cmd = (
                 # Bind sandbox dir to /mnt/data (before hiding sandboxes dir)
@@ -120,6 +124,8 @@ class SandboxExecutor:
                 f"mount -t tmpfs -o size=1k tmpfs /app/src && "
                 # BUG-003: Hide /proc (except Java which needs /proc/self/exe)
                 f"{proc_mask}"
+                # BUG-007: Ephemeral /tmp — prevent cross-session data persistence
+                f"mount -t tmpfs -o size={tmpfs_size}m,mode=1777 tmpfs /tmp && "
                 # Execute nsjail
                 f"{nsjail_cmd}"
             )

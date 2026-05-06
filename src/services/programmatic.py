@@ -186,6 +186,8 @@ class ProgrammaticService:
                 shlex.quote(str(a)) for a in [settings.nsjail_binary] + nsjail_args
             )
 
+            tmpfs_size = settings.sandbox_tmpfs_size_mb
+
             wrapper_cmd = (
                 f"mount --bind {shlex.quote(str(sandbox_info.data_dir))} /mnt/data && "
                 f"mount -t tmpfs -o size=1k tmpfs /var/lib/code-interpreter/sandboxes && "
@@ -194,7 +196,9 @@ class ProgrammaticService:
                 f"mount -t tmpfs -o size=1k tmpfs /app/ssl && "
                 f"mount -t tmpfs -o size=1k tmpfs /app/dashboard && "
                 f"mount -t tmpfs -o size=1k tmpfs /app/src && "
-                f"mount --bind /tmp/empty_proc /proc && "
+                f"mount --bind /var/lib/code-interpreter/empty_proc /proc && "
+                # BUG-007: Ephemeral /tmp — prevent cross-session data persistence
+                f"mount -t tmpfs -o size={tmpfs_size}m,mode=1777 tmpfs /tmp && "
                 f"{nsjail_cmd}"
             )
 
