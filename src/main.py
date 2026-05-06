@@ -160,7 +160,7 @@ async def _startup_egress_proxy(app: FastAPI) -> None:
         # Sticky + world-writable, like /tmp. The sandbox uid (e.g. 1001) needs
         # to write here; keeping it sticky means one sandbox can't unlink
         # another's files.
-        os.chmod(str(deps_root), 0o1777)
+        os.chmod(str(deps_root), 0o1777)  # nosec B103
     except OSError as exc:
         logger.warning(
             "Could not prepare skill-deps directory; "

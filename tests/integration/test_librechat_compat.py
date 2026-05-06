@@ -1901,7 +1901,7 @@ class TestLibreChatUploadBatch:
         stored_filenames = []
 
         async def fake_store(
-            session_id, filename, content, content_type, is_agent_file
+            session_id, filename, content, content_type, is_agent_file, is_read_only=False
         ):
             stored_filenames.append(filename)
             return f"fid-{len(stored_filenames)}"

@@ -302,7 +302,7 @@ async def purge_skill_deps(_: str = Depends(verify_master_key)):
 
     # Reset perms so future installs from sandbox uids work.
     try:
-        os.chmod(str(deps_root), 0o1777)
+        os.chmod(str(deps_root), 0o1777)  # nosec B103
     except OSError:
         pass
 

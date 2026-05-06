@@ -211,11 +211,11 @@ async def test_tunnel_pipes_bytes_when_allowed(monkeypatch):
     echo_server = await asyncio.start_server(echo_handler, "127.0.0.1", echo_port)
 
     proxy_port = _free_port()
-    proxy = EgressProxy(port=proxy_port, allowlist={"localhost"})
+    proxy = EgressProxy(port=proxy_port, allowlist={"127.0.0.1"})
     await proxy.start()
     try:
         status, reader, writer = await _send_connect(
-            proxy_port, f"localhost:{echo_port}"
+            proxy_port, f"127.0.0.1:{echo_port}"
         )
         assert b"200" in status, status
 
