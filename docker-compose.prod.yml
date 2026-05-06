@@ -68,21 +68,19 @@ services:
     image: dxflrs/garage:v2.3.0
     container_name: code-interpreter-garage
     restart: unless-stopped
-    command: >
-      server
-      --single-node
-      --default-bucket ${S3_BUCKET:-code-interpreter-files}
+    command: /garage server --single-node --default-bucket
     ports:
       - "127.0.0.1:${S3_PORT:-3900}:3900"
       - "127.0.0.1:${GARAGE_ADMIN_PORT:-3903}:3903"
     environment:
-      GARAGE_DEFAULT_ACCESS_KEY: ${S3_ACCESS_KEY:-minioadmin}
-      GARAGE_DEFAULT_SECRET_KEY: ${S3_SECRET_KEY:-minioadmin}
+      GARAGE_DEFAULT_ACCESS_KEY: ${S3_ACCESS_KEY:-GKminioadmin0000}
+      GARAGE_DEFAULT_SECRET_KEY: ${S3_SECRET_KEY:-minioadminsecret}
+      GARAGE_DEFAULT_BUCKET: ${S3_BUCKET:-code-interpreter-files}
     volumes:
       - garage-data:/var/lib/garage
       - ./garage.toml:/etc/garage.toml
     healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:3900 || exit 1"]
+      test: ["CMD", "/garage", "status"]
       interval: 10s
       timeout: 5s
       retries: 5

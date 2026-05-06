@@ -13,8 +13,8 @@ os.environ.setdefault("API_KEY", "test-api-key-for-testing-12345")
 os.environ.setdefault("REDIS_HOST", "localhost")
 os.environ.setdefault("REDIS_PORT", "6379")
 os.environ.setdefault("S3_ENDPOINT", "localhost:3900")
-os.environ.setdefault("S3_ACCESS_KEY", "minioadmin")
-os.environ.setdefault("S3_SECRET_KEY", "minioadmin")
+os.environ.setdefault("S3_ACCESS_KEY", "GKminioadmin0000")
+os.environ.setdefault("S3_SECRET_KEY", "minioadminsecret")
 os.environ.setdefault("S3_SECURE", "false")
 
 from src.services.session import SessionService
