@@ -58,10 +58,50 @@ USER_CODE_PATH = PTC_DIR / "user.sh"
 _real_stdin = sys.stdin
 _real_stdout = sys.stdout
 
-# Bash identifier rules: [A-Za-z_][A-Za-z0-9_]*. We refuse to wrap any tool
-# whose name doesn't match — both for shell safety and because the user
-# couldn't call it from bash anyway.
+# Bash identifier rules: [A-Za-z_][A-Za-z0-9_]*. Names that don't match
+# get normalized via `_normalize_bash_name` so the user can still call the
+# tool from bash — the SDK applies the same normalization client-side when
+# generating code.
 _VALID_BASH_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+_BASH_RESERVED = frozenset(
+    {
+        "if",
+        "then",
+        "else",
+        "elif",
+        "fi",
+        "case",
+        "esac",
+        "for",
+        "while",
+        "until",
+        "do",
+        "done",
+        "in",
+        "function",
+        "select",
+        "time",
+        "coproc",
+        "declare",
+        "typeset",
+        "local",
+        "readonly",
+        "export",
+        "unset",
+    }
+)
+
+
+def _normalize_bash_name(name: str) -> str:
+    """Match SDK's normalizeToBashIdentifier so generated code can call functions."""
+    result = re.sub(r"[-\s.]", "_", name)
+    result = re.sub(r"[^a-zA-Z0-9_]", "", result)
+    if result and result[0].isdigit():
+        result = "_" + result
+    if result in _BASH_RESERVED:
+        result = result + "_tool"
+    return result or "_unnamed"
 
 
 def _write_message(msg: dict) -> None:
@@ -91,10 +131,11 @@ def _generate_rcfile(tools: list) -> str:
     ]
     for tool in tools:
         name = tool.get("name", "")
-        if not _VALID_BASH_NAME.match(name):
+        func_name = _normalize_bash_name(name)
+        if not func_name or func_name == "_unnamed":
             continue
         lines.append(
-            f"{name}() {{\n"
+            f"{func_name}() {{\n"
             # Use an explicit conditional rather than ${1:-{}} — the brace-default
             # form parses as ${1:-{} followed by a literal }, which appends a
             # stray brace whenever $1 is set.
@@ -102,13 +143,13 @@ def _generate_rcfile(tools: list) -> str:
             f'    if [ -z "$input_json" ]; then input_json="{{}}"; fi\n'
             f"    local payload\n"
             f"    payload=$(jq -c -n --arg name {shlex.quote(name)} "
-            f'--argjson input "$input_json" \'{{name:$name,input:$input}}\' 2>/dev/null) || \\\n'
+            f"--argjson input \"$input_json\" '{{name:$name,input:$input}}' 2>/dev/null) || \\\n"
             f"    payload=$(jq -c -n --arg name {shlex.quote(name)} "
-            f'--arg input "$input_json" \'{{name:$name,input:$input}}\')\n'
+            f"--arg input \"$input_json\" '{{name:$name,input:$input}}')\n"
             f'    printf \'%s\\n\' "$payload" > "$PTC_CALL_FIFO"\n'
             f"    local result\n"
             f'    IFS= read -r result < "$PTC_RESULT_FIFO"\n'
-            f'    printf \'%s\\n\' "$result"\n'
+            f"    printf '%s\\n' \"$result\"\n"
             f"}}\n"
         )
     return "\n".join(lines)
@@ -216,9 +257,7 @@ async def _run(code: str, tools: list) -> dict:
                     break
 
                 results = response.get("results", [])
-                target = next(
-                    (r for r in results if r.get("call_id") == call_id), None
-                )
+                target = next((r for r in results if r.get("call_id") == call_id), None)
                 if target is None and results:
                     target = results[0]
 

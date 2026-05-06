@@ -16,6 +16,7 @@ Usage:
 """
 
 import asyncio
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -414,6 +415,13 @@ class ExecutionOrchestrator:
                     file_info.file_id,
                 )
 
+            file_metadata = await self.file_service.get_file_metadata(
+                file_ref.session_id, file_info.file_id
+            )
+            is_read_only = (
+                file_metadata.get("is_read_only") == "1" if file_metadata else False
+            )
+
             mounted.append(
                 {
                     "file_id": file_info.file_id,
@@ -422,6 +430,8 @@ class ExecutionOrchestrator:
                     "size": file_info.size,
                     "session_id": file_ref.session_id,
                     "is_linked_input": False,
+                    "entity_id": getattr(file_ref, "entity_id", None),
+                    "is_read_only": is_read_only,
                 }
             )
             mounted_ids.add(key)
@@ -457,6 +467,9 @@ class ExecutionOrchestrator:
             is_linked_input = (
                 file_metadata.get("type") == "linked_input" if file_metadata else False
             )
+            is_read_only = (
+                file_metadata.get("is_read_only") == "1" if file_metadata else False
+            )
 
             # Skip duplicates (shouldn't happen, but defensive)
             key = (ctx.session_id, file_info.file_id)
@@ -471,6 +484,7 @@ class ExecutionOrchestrator:
                     "size": file_info.size,
                     "session_id": ctx.session_id,
                     "is_linked_input": is_linked_input,
+                    "is_read_only": is_read_only,
                 }
             )
             mounted_ids.add(key)
@@ -649,10 +663,18 @@ class ExecutionOrchestrator:
         # Normalize args from request
         normalized_args = self._normalize_args(ctx.request.args)
 
+        # Convert per-request timeout (ms) to seconds, clamped to server max.
+        timeout_seconds = (
+            math.ceil(ctx.request.timeout / 1000)
+            if ctx.request.timeout
+            else settings.max_execution_time
+        )
+        timeout_seconds = min(timeout_seconds, settings.max_execution_time)
+
         exec_request = ExecuteCodeRequest(
             code=ctx.request.code,
             language=ctx.request.lang,
-            timeout=settings.max_execution_time,
+            timeout=timeout_seconds,
             args=normalized_args,
         )
 
@@ -721,6 +743,29 @@ class ExecutionOrchestrator:
             if not filename or filename == "_":
                 continue
 
+            meta = output.metadata or {}
+
+            # Inherited files: untouched mounted files. Skip download and emit
+            # the original FileRef so clients can split "Generated" from
+            # "Available" in LLM prompts and avoid re-uploading.
+            if meta.get("inherited"):
+                generated.append(
+                    FileRef(
+                        id=meta["original_file_id"],
+                        name=filename,
+                        session_id=meta.get("original_session_id"),
+                        inherited=True,
+                        entity_id=meta.get("original_entity_id"),
+                    )
+                )
+                logger.debug(
+                    "Inherited file passed through",
+                    session_id=ctx.session_id,
+                    filename=filename,
+                    original_file_id=meta.get("original_file_id"),
+                )
+                continue
+
             try:
                 # Get file content from container (use ctx.container directly, no session lookup)
                 file_content = await self._get_file_from_container(
@@ -733,13 +778,17 @@ class ExecutionOrchestrator:
                     file_content,
                 )
 
-                generated.append(
-                    FileRef(
-                        id=file_id,
-                        name=filename,
-                        session_id=ctx.session_id,  # Include for cross-message persistence
-                    )
+                file_ref = FileRef(
+                    id=file_id,
+                    name=filename,
+                    session_id=ctx.session_id,  # Include for cross-message persistence
                 )
+                if meta.get("modified_from_id"):
+                    file_ref.modified_from = {
+                        "id": meta["modified_from_id"],
+                        "session_id": meta.get("modified_from_session_id") or "",
+                    }
+                generated.append(file_ref)
                 logger.debug(
                     "Generated file stored",
                     session_id=ctx.session_id,

@@ -181,20 +181,41 @@ class TestDetectGeneratedFilesInPlaceEdits:
         f = info.data_dir / "demo_deck.js"
         f.write_bytes(b"// v1 content\n")
         st = os.stat(f)
-        info.mounted_file_stats = {"demo_deck.js": (st.st_mtime_ns, st.st_size)}
+        info.mounted_file_stats = {
+            "demo_deck.js": (
+                st.st_mtime_ns,
+                st.st_size,
+                "file_id_123",
+                "session_123",
+                None,
+            )
+        }
 
         files = await runner._detect_generated_files(info)
         paths = [f["path"] for f in files]
 
-        # No edit happened -> the mounted file is not surfaced.
-        assert paths == []
+        # No edit happened -> the mounted file comes back as "inherited"
+        # rather than as a regenerated artifact, so the path will appear
+        # but with inherited=True. Confirm it is marked inherited.
+        assert paths == ["/mnt/data/demo_deck.js"]
+        assert files[0]["inherited"] is True
+        assert files[0]["original_file_id"] == "file_id_123"
+        assert files[0]["original_session_id"] == "session_123"
 
     async def test_edited_mounted_file_is_surfaced(self, runner, tmp_path):
         info = _sandbox_info(tmp_path)
         f = info.data_dir / "demo_deck.js"
         f.write_bytes(b"// v1 content\n")
         st = os.stat(f)
-        info.mounted_file_stats = {"demo_deck.js": (st.st_mtime_ns, st.st_size)}
+        info.mounted_file_stats = {
+            "demo_deck.js": (
+                st.st_mtime_ns,
+                st.st_size,
+                "file_id_123",
+                "session_123",
+                None,
+            )
+        }
 
         # Simulate user code editing the file in place. Touching mtime is
         # enough since size also changes here, but we'd want to detect either.
@@ -220,7 +241,15 @@ class TestDetectGeneratedFilesInPlaceEdits:
         f.write_bytes(b"col1\n")
         st = os.stat(f)
         # Pretend the prior snapshot had a different size at the same mtime.
-        info.mounted_file_stats = {"report.csv": (st.st_mtime_ns, st.st_size + 100)}
+        info.mounted_file_stats = {
+            "report.csv": (
+                st.st_mtime_ns,
+                st.st_size + 100,
+                "file_id_456",
+                "session_456",
+                None,
+            )
+        }
 
         files = await runner._detect_generated_files(info)
         paths = [f["path"] for f in files]
@@ -237,13 +266,24 @@ class TestDetectGeneratedFilesInPlaceEdits:
         f = sub / "SKILL.md"
         f.write_bytes(b"# v1\n")
         st = os.stat(f)
+        stat_tuple = (
+            st.st_mtime_ns,
+            st.st_size,
+            "file_id_789",
+            "session_789",
+            None,
+        )
         info.mounted_file_stats = {
-            "skills/weather/SKILL.md": (st.st_mtime_ns, st.st_size),
-            "SKILL.md": (st.st_mtime_ns, st.st_size),
+            "skills/weather/SKILL.md": stat_tuple,
+            "SKILL.md": stat_tuple,
         }
 
-        # No change: skipped.
-        assert await runner._detect_generated_files(info) == []
+        # No change: surfaced as inherited (not skipped under the new
+        # inherited-passthrough behavior).
+        unchanged = await runner._detect_generated_files(info)
+        assert len(unchanged) == 1
+        assert unchanged[0]["inherited"] is True
+        assert unchanged[0]["path"] == "/mnt/data/skills/weather/SKILL.md"
 
         # Edit: surfaced.
         import time
@@ -261,16 +301,28 @@ class TestDetectGeneratedFilesInPlaceEdits:
         existing = info.data_dir / "input.csv"
         existing.write_bytes(b"data")
         st = os.stat(existing)
-        info.mounted_file_stats = {"input.csv": (st.st_mtime_ns, st.st_size)}
+        info.mounted_file_stats = {
+            "input.csv": (
+                st.st_mtime_ns,
+                st.st_size,
+                "input_file_id",
+                "input_session",
+                None,
+            )
+        }
 
         # User code generates a new artifact.
         (info.data_dir / "output.png").write_bytes(b"png")
 
         files = await runner._detect_generated_files(info)
-        paths = sorted(f["path"] for f in files)
-
-        # Mounted file unchanged (skipped); new file surfaced.
-        assert paths == ["/mnt/data/output.png"]
+        # Inherited (input.csv) + new (output.png).
+        by_path = {f["path"]: f for f in files}
+        assert set(by_path.keys()) == {
+            "/mnt/data/input.csv",
+            "/mnt/data/output.png",
+        }
+        assert by_path["/mnt/data/input.csv"]["inherited"] is True
+        assert "inherited" not in by_path["/mnt/data/output.png"]
 
 
 class TestMountFilesNestedPaths:
@@ -331,3 +383,178 @@ class TestMountFilesNestedPaths:
 
         landed = info.data_dir / "data.csv"
         assert landed.is_file()
+
+
+class TestDetectGeneratedFilesInheritance:
+    """Direct coverage of the inherited / modified_from / new branches in
+    _detect_generated_files. These determine what the orchestrator hands back
+    to clients on the response."""
+
+    async def test_unchanged_mount_emits_inherited_with_lineage(self, runner, tmp_path):
+        info = _sandbox_info(tmp_path)
+        f = info.data_dir / "data.csv"
+        f.write_bytes(b"col1\n1\n")
+        st = os.stat(f)
+        info.mounted_file_stats = {
+            "data.csv": (
+                st.st_mtime_ns,
+                st.st_size,
+                "orig-fid",
+                "orig-sess",
+                "agent-xyz",
+            )
+        }
+
+        files = await runner._detect_generated_files(info)
+        assert len(files) == 1
+        info_ = files[0]
+        assert info_["inherited"] is True
+        assert info_["original_file_id"] == "orig-fid"
+        assert info_["original_session_id"] == "orig-sess"
+        assert info_["original_entity_id"] == "agent-xyz"
+
+    async def test_edited_mount_emits_modified_from(self, runner, tmp_path):
+        import time
+
+        info = _sandbox_info(tmp_path)
+        f = info.data_dir / "report.csv"
+        f.write_bytes(b"v1\n")
+        st = os.stat(f)
+        info.mounted_file_stats = {
+            "report.csv": (
+                st.st_mtime_ns,
+                st.st_size,
+                "orig-fid",
+                "orig-sess",
+                None,
+            )
+        }
+
+        time.sleep(0.01)
+        f.write_bytes(b"v2 content extended\n")
+
+        files = await runner._detect_generated_files(info)
+        assert len(files) == 1
+        info_ = files[0]
+        assert info_.get("inherited") is None
+        assert info_["modified_from_id"] == "orig-fid"
+        assert info_["modified_from_session_id"] == "orig-sess"
+
+    async def test_new_unmounted_file_has_no_lineage(self, runner, tmp_path):
+        info = _sandbox_info(tmp_path)
+        (info.data_dir / "fresh.png").write_bytes(b"png-bytes")
+
+        files = await runner._detect_generated_files(info)
+        assert len(files) == 1
+        info_ = files[0]
+        assert "inherited" not in info_
+        assert "modified_from_id" not in info_
+        assert "original_file_id" not in info_
+
+    async def test_inherited_files_not_counted_against_budget(
+        self, runner, tmp_path, monkeypatch
+    ):
+        """Inherited files bypass `max_output_files`. Force the budget to 1
+        and confirm that an inherited file plus a generated file both come
+        back."""
+        from src.services.execution import runner as runner_mod
+
+        monkeypatch.setattr(runner_mod.settings, "max_output_files", 1)
+
+        info = _sandbox_info(tmp_path)
+        mounted = info.data_dir / "input.csv"
+        mounted.write_bytes(b"col1\n")
+        st = os.stat(mounted)
+        info.mounted_file_stats = {
+            "input.csv": (
+                st.st_mtime_ns,
+                st.st_size,
+                "orig-fid",
+                "orig-sess",
+                None,
+            )
+        }
+        # Two new generated files; budget=1 should clip the generated set
+        # to one but the inherited file must still come back.
+        (info.data_dir / "out_a.png").write_bytes(b"a")
+        (info.data_dir / "out_b.png").write_bytes(b"b")
+
+        files = await runner._detect_generated_files(info)
+        inherited = [f for f in files if f.get("inherited")]
+        non_inherited = [f for f in files if not f.get("inherited")]
+        assert len(inherited) == 1
+        assert inherited[0]["path"] == "/mnt/data/input.csv"
+        assert len(non_inherited) == 1
+
+
+class TestSetFilePerms:
+    """`_set_file_perms` is a closure inside `_mount_files_to_sandbox`. We
+    don't have direct access to it, so we exercise the chmod choice through
+    the public mount path with `read_only` toggled."""
+
+    async def test_read_only_false_sets_644(self, runner, tmp_path):
+        from unittest.mock import MagicMock as _MM
+
+        info = _sandbox_info(tmp_path)
+        chmod_calls = []
+
+        def _capture_chmod(path, mode):
+            chmod_calls.append((path, mode))
+
+        async def _fake_stream(session_id, file_id, dest_path):
+            Path(dest_path).write_bytes(b"data")
+            return True
+
+        with patch("src.services.file.FileService") as MockFS, patch(
+            "src.services.execution.runner.os.chown"
+        ), patch("src.services.execution.runner.os.chmod", side_effect=_capture_chmod):
+            MockFS.return_value.stream_file_to_path = AsyncMock(
+                side_effect=_fake_stream
+            )
+            files = [
+                {
+                    "filename": "data.csv",
+                    "file_id": "fid",
+                    "session_id": "sid",
+                    "size": 4,
+                    "is_read_only": False,
+                }
+            ]
+            await runner._mount_files_to_sandbox(info, files, language="py")
+
+        # The data file gets chmod 0o644 in the writable case.
+        modes = [mode for path, mode in chmod_calls if path.endswith("data.csv")]
+        assert 0o644 in modes
+        assert 0o444 not in modes
+
+    async def test_read_only_true_sets_444(self, runner, tmp_path):
+        info = _sandbox_info(tmp_path)
+        chmod_calls = []
+
+        def _capture_chmod(path, mode):
+            chmod_calls.append((path, mode))
+
+        async def _fake_stream(session_id, file_id, dest_path):
+            Path(dest_path).write_bytes(b"data")
+            return True
+
+        with patch("src.services.file.FileService") as MockFS, patch(
+            "src.services.execution.runner.os.chown"
+        ), patch("src.services.execution.runner.os.chmod", side_effect=_capture_chmod):
+            MockFS.return_value.stream_file_to_path = AsyncMock(
+                side_effect=_fake_stream
+            )
+            files = [
+                {
+                    "filename": "data.csv",
+                    "file_id": "fid",
+                    "session_id": "sid",
+                    "size": 4,
+                    "is_read_only": True,
+                }
+            ]
+            await runner._mount_files_to_sandbox(info, files, language="py")
+
+        modes = [mode for path, mode in chmod_calls if path.endswith("data.csv")]
+        assert 0o444 in modes
+        assert 0o644 not in modes

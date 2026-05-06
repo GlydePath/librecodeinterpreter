@@ -7,7 +7,7 @@ the CLI arguments for invoking nsjail.
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import structlog
 
@@ -38,7 +38,9 @@ class SandboxInfo:
     # runs. Used by _detect_generated_files to distinguish "user edited a
     # mounted file in place" from "mounted file is unchanged" so iterative
     # edits to scripts get persisted as new file_ids in the current session.
-    mounted_file_stats: Dict[str, tuple] = field(default_factory=dict)
+    mounted_file_stats: Dict[
+        str, Tuple[int, int, Optional[str], Optional[str], Optional[str]]
+    ] = field(default_factory=dict)
 
     @property
     def id(self) -> str:
@@ -207,7 +209,9 @@ class NsjailConfig:
         #   bind there. For other languages, keep blocking.
         # Using ERRNO(1) so the process gets EPERM rather than SIGSYS
         if normalized_lang == "bash":
-            seccomp_policy = "POLICY policy { ERRNO(1) { ptrace } } USE policy DEFAULT ALLOW"
+            seccomp_policy = (
+                "POLICY policy { ERRNO(1) { ptrace } } USE policy DEFAULT ALLOW"
+            )
         else:
             seccomp_policy = (
                 "POLICY policy { ERRNO(1) { ptrace, bind } } USE policy DEFAULT ALLOW"

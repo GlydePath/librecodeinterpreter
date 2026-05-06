@@ -280,6 +280,7 @@ class TestAutoMountSessionFiles:
                 "size": 100,
                 "session_id": "test-session-123",
                 "is_linked_input": False,
+                "is_read_only": False,
             }
         ]
 
@@ -633,6 +634,168 @@ class TestExplicitFileMounting:
         assert len(result) == 0
 
 
+class TestExecuteCodeTimeout:
+    """Per-request timeout (ms) → execution timeout (s), clamped to server max.
+
+    Implementation lives in `_execute_code` at orchestrator.py:661+. We patch
+    the execution service to capture the constructed `ExecuteCodeRequest` and
+    assert on its `timeout` (seconds)."""
+
+    @pytest.mark.asyncio
+    async def test_timeout_ms_to_seconds_with_ceil(self, orchestrator):
+        from types import SimpleNamespace
+        from src.models.execution import CodeExecution, ExecutionStatus
+        from src.models.exec import ExecRequest
+
+        captured = {}
+
+        async def _capture(session_id, exec_request, mounted_files, **kwargs):
+            captured["request"] = exec_request
+            return (
+                CodeExecution(
+                    execution_id="x",
+                    session_id="s",
+                    code="",
+                    language="py",
+                    status=ExecutionStatus.COMPLETED,
+                    outputs=[],
+                    started_at=datetime.now(),
+                ),
+                SimpleNamespace(),
+                None,
+                None,
+                None,
+            )
+
+        orchestrator.execution_service.execute_code = _capture
+
+        ctx = ExecutionContext(
+            request=ExecRequest(code="x", lang="py", timeout=5000),
+            request_id="r",
+            session_id="s",
+        )
+        await orchestrator._execute_code(ctx)
+        # 5000 ms == 5 s exactly.
+        assert captured["request"].timeout == 5
+
+    @pytest.mark.asyncio
+    async def test_timeout_ms_ceil_for_non_integer_seconds(self, orchestrator):
+        from types import SimpleNamespace
+        from src.models.execution import CodeExecution, ExecutionStatus
+        from src.models.exec import ExecRequest
+
+        captured = {}
+
+        async def _capture(session_id, exec_request, mounted_files, **kwargs):
+            captured["request"] = exec_request
+            return (
+                CodeExecution(
+                    execution_id="x",
+                    session_id="s",
+                    code="",
+                    language="py",
+                    status=ExecutionStatus.COMPLETED,
+                    outputs=[],
+                    started_at=datetime.now(),
+                ),
+                SimpleNamespace(),
+                None,
+                None,
+                None,
+            )
+
+        orchestrator.execution_service.execute_code = _capture
+        # 4500 ms → ceil(4.5) == 5
+        ctx = ExecutionContext(
+            request=ExecRequest(code="x", lang="py", timeout=4500),
+            request_id="r",
+            session_id="s",
+        )
+        await orchestrator._execute_code(ctx)
+        assert captured["request"].timeout == 5
+
+    @pytest.mark.asyncio
+    async def test_timeout_none_uses_server_default(self, orchestrator):
+        from types import SimpleNamespace
+        from src.config import settings
+        from src.models.execution import CodeExecution, ExecutionStatus
+        from src.models.exec import ExecRequest
+
+        captured = {}
+
+        async def _capture(session_id, exec_request, mounted_files, **kwargs):
+            captured["request"] = exec_request
+            return (
+                CodeExecution(
+                    execution_id="x",
+                    session_id="s",
+                    code="",
+                    language="py",
+                    status=ExecutionStatus.COMPLETED,
+                    outputs=[],
+                    started_at=datetime.now(),
+                ),
+                SimpleNamespace(),
+                None,
+                None,
+                None,
+            )
+
+        orchestrator.execution_service.execute_code = _capture
+
+        ctx = ExecutionContext(
+            request=ExecRequest(code="x", lang="py"),
+            request_id="r",
+            session_id="s",
+        )
+        await orchestrator._execute_code(ctx)
+        assert captured["request"].timeout == settings.max_execution_time
+
+    @pytest.mark.asyncio
+    async def test_timeout_clamped_to_server_max(self, orchestrator, monkeypatch):
+        """The pydantic validator caps `timeout` at 300000 ms == 300 s. The
+        orchestrator must additionally clamp to `settings.max_execution_time`
+        so a client can't exceed the per-server cap."""
+        from types import SimpleNamespace
+        from src.config import settings
+        from src.models.execution import CodeExecution, ExecutionStatus
+        from src.models.exec import ExecRequest
+
+        # Force the server max well below the validator's upper bound so
+        # we can observe clamping.
+        monkeypatch.setattr(settings, "max_execution_time", 10)
+
+        captured = {}
+
+        async def _capture(session_id, exec_request, mounted_files, **kwargs):
+            captured["request"] = exec_request
+            return (
+                CodeExecution(
+                    execution_id="x",
+                    session_id="s",
+                    code="",
+                    language="py",
+                    status=ExecutionStatus.COMPLETED,
+                    outputs=[],
+                    started_at=datetime.now(),
+                ),
+                SimpleNamespace(),
+                None,
+                None,
+                None,
+            )
+
+        orchestrator.execution_service.execute_code = _capture
+
+        ctx = ExecutionContext(
+            request=ExecRequest(code="x", lang="py", timeout=300000),
+            request_id="r",
+            session_id="s",
+        )
+        await orchestrator._execute_code(ctx)
+        assert captured["request"].timeout == 10
+
+
 class TestHandleGeneratedFilesNestedPaths:
     """Tests that _handle_generated_files preserves subdirectory paths
     (LibreChat PR #12848 expects e.g. name='charts/foo.png')."""
@@ -656,7 +819,9 @@ class TestHandleGeneratedFilesNestedPaths:
         execution = SimpleNamespace(
             outputs=[
                 SimpleNamespace(
-                    type=OutputType.FILE, content="/mnt/data/charts/foo.png"
+                    type=OutputType.FILE,
+                    content="/mnt/data/charts/foo.png",
+                    metadata=None,
                 )
             ]
         )
@@ -686,7 +851,13 @@ class TestHandleGeneratedFilesNestedPaths:
         mock_file_service.store_execution_output_file = AsyncMock(return_value="fid")
 
         execution = SimpleNamespace(
-            outputs=[SimpleNamespace(type=OutputType.FILE, content="/mnt/data/foo.png")]
+            outputs=[
+                SimpleNamespace(
+                    type=OutputType.FILE,
+                    content="/mnt/data/foo.png",
+                    metadata=None,
+                )
+            ]
         )
         ctx = ExecutionContext(
             request=ExecRequest(code="print()", lang="py"),
@@ -713,7 +884,9 @@ class TestHandleGeneratedFilesNestedPaths:
         execution = SimpleNamespace(
             outputs=[
                 SimpleNamespace(
-                    type=OutputType.FILE, content="/mnt/data/charts/.hidden.png"
+                    type=OutputType.FILE,
+                    content="/mnt/data/charts/.hidden.png",
+                    metadata=None,
                 )
             ]
         )

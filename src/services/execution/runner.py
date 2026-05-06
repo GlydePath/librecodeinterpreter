@@ -247,6 +247,27 @@ class CodeExecutionRunner:
 
             for file_info in generated_files:
                 if OutputProcessor.validate_generated_file(file_info):
+                    meta: Dict[str, Any] = {}
+                    if file_info.get("inherited"):
+                        meta = {
+                            k: file_info[k]
+                            for k in (
+                                "inherited",
+                                "original_file_id",
+                                "original_session_id",
+                                "original_entity_id",
+                            )
+                            if k in file_info
+                        }
+                    elif file_info.get("modified_from_id"):
+                        meta = {
+                            k: file_info[k]
+                            for k in (
+                                "modified_from_id",
+                                "modified_from_session_id",
+                            )
+                            if k in file_info
+                        }
                     outputs.append(
                         ExecutionOutput(
                             type=OutputType.FILE,
@@ -254,6 +275,7 @@ class CodeExecutionRunner:
                             mime_type=file_info.get("mime_type"),
                             size=file_info.get("size"),
                             timestamp=end_time,
+                            metadata=meta or None,
                         )
                     )
 
@@ -711,9 +733,9 @@ class CodeExecutionRunner:
                     except (PermissionError, FileNotFoundError):
                         pass
 
-            def _set_file_perms(path, uid):
+            def _set_file_perms(path, uid, read_only=False):
                 os.chown(path, uid, uid)
-                os.chmod(path, 0o644)
+                os.chmod(path, 0o444 if read_only else 0o644)
                 return os.path.getsize(path)
 
             for file_info in files:
@@ -747,8 +769,9 @@ class CodeExecutionRunner:
                     )
 
                     if success:
+                        is_read_only = file_info.get("is_read_only", False)
                         actual_size = await asyncio.to_thread(
-                            _set_file_perms, dest_path, user_id
+                            _set_file_perms, dest_path, user_id, read_only=is_read_only
                         )
                         # Snapshot stats so _detect_generated_files can tell
                         # later whether user code edited this file in place.
@@ -757,7 +780,14 @@ class CodeExecutionRunner:
                         # of which form the post-walk uses.
                         try:
                             st = await asyncio.to_thread(os.stat, dest_path)
-                            stat_tuple = (st.st_mtime_ns, st.st_size)
+                            entity_id = file_info.get("entity_id")
+                            stat_tuple = (
+                                st.st_mtime_ns,
+                                st.st_size,
+                                file_id,
+                                session_id,
+                                entity_id,
+                            )
                             sandbox_info.mounted_file_stats[normalized_filename] = (
                                 stat_tuple
                             )
@@ -898,8 +928,30 @@ class CodeExecutionRunner:
                     # `skills/foo/SKILL.md`, sometimes flat).
                     prior = mounted_stats.get(rel) or mounted_stats.get(name)
                     if prior is not None:
-                        if prior == (st.st_mtime_ns, size):
-                            continue  # untouched mounted file
+                        if prior[:2] == (st.st_mtime_ns, size):
+                            candidates.append(
+                                {
+                                    "path": f"/mnt/data/{rel}",
+                                    "size": size,
+                                    "mime_type": OutputProcessor.guess_mime_type(rel),
+                                    "inherited": True,
+                                    "original_file_id": prior[2],
+                                    "original_session_id": prior[3],
+                                    "original_entity_id": prior[4],
+                                }
+                            )
+                            continue
+                        else:
+                            candidates.append(
+                                {
+                                    "path": f"/mnt/data/{rel}",
+                                    "size": size,
+                                    "mime_type": OutputProcessor.guess_mime_type(rel),
+                                    "modified_from_id": prior[2],
+                                    "modified_from_session_id": prior[3],
+                                }
+                            )
+                            continue
 
                     candidates.append(
                         {
@@ -910,9 +962,12 @@ class CodeExecutionRunner:
                     )
 
             # Stable ordering before applying the output budget keeps tests
-            # deterministic when many files exist.
-            candidates.sort(key=lambda f: f["path"])
-            return candidates[: settings.max_output_files]
+            # deterministic when many files exist. Inherited files don't count
+            # against the budget — they're not new content.
+            inherited = [c for c in candidates if c.get("inherited")]
+            generated = [c for c in candidates if not c.get("inherited")]
+            generated.sort(key=lambda f: f["path"])
+            return inherited + generated[: settings.max_output_files]
 
         except Exception as e:
             logger.error(f"Failed to detect generated files: {e}")

@@ -250,6 +250,13 @@ async def upload_files_batch(
     )
     is_agent_file = entity_id is not None
 
+    read_only_raw = form.get("read_only")
+    is_read_only = isinstance(read_only_raw, str) and read_only_raw.lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
     metadata = {"entity_id": entity_id} if entity_id else {}
     session = await session_service.create_session(SessionCreate(metadata=metadata))
     session_id = session.session_id
@@ -287,6 +294,7 @@ async def upload_files_batch(
                 content=content,
                 content_type=upload.content_type,
                 is_agent_file=is_agent_file,
+                is_read_only=is_read_only,
             )
 
             results.append(
