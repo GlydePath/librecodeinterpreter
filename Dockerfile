@@ -233,7 +233,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # ============================================
 RUN mkdir -p /var/lib/code-interpreter/sandboxes && \
     mkdir -p /mnt/data && \
-    mkdir -p /tmp/empty_proc
+    mkdir -p /var/lib/code-interpreter/empty_proc
 
 RUN groupadd -g 1001 codeuser && \
     useradd -u 1001 -g codeuser -m codeuser && \

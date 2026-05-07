@@ -103,7 +103,13 @@ class SandboxExecutor:
             if lang in ("java", "rs", "bash"):
                 proc_mask = ""
             else:
-                proc_mask = "mount --bind /tmp/empty_proc /proc && "
+                proc_mask = (
+                    "mount --bind /var/lib/code-interpreter/empty_proc /proc && "
+                )
+
+            tmpfs_size = settings.sandbox_tmpfs_size_mb
+            noexec_tmpfs = "noexec,nosuid,nodev,"
+            deps_path = settings.skill_deps_path
 
             wrapper_cmd = (
                 # Bind sandbox dir to /mnt/data (before hiding sandboxes dir)
@@ -120,6 +126,17 @@ class SandboxExecutor:
                 f"mount -t tmpfs -o size=1k tmpfs /app/src && "
                 # BUG-003: Hide /proc (except Java which needs /proc/self/exe)
                 f"{proc_mask}"
+                # BUG-007: Ephemeral /tmp with noexec,nosuid,nodev
+                f"mount -t tmpfs -o {noexec_tmpfs}size={tmpfs_size}m,mode=1777 tmpfs /tmp && "
+                # BUG-008: Lock down other writable paths
+                f"mount -t tmpfs -o {noexec_tmpfs}size=1m,mode=1777 tmpfs /var/tmp && "
+                f"mount -t tmpfs -o {noexec_tmpfs}size=1m,mode=1777 tmpfs /run/lock && "
+                f"mount -t tmpfs -o {noexec_tmpfs}size=1m,mode=1733 tmpfs /var/lib/php/sessions && "
+                # BUG-008: skill-deps nosuid,nodev (not noexec — installed CLIs need exec)
+                f"(test -d {shlex.quote(deps_path)} && "
+                f"mount --bind {shlex.quote(deps_path)} {shlex.quote(deps_path)} && "
+                f"mount -o remount,bind,nosuid,nodev {shlex.quote(deps_path)} "
+                f"|| true) && "
                 # Execute nsjail
                 f"{nsjail_cmd}"
             )
