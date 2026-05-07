@@ -187,6 +187,8 @@ class ProgrammaticService:
             )
 
             tmpfs_size = settings.sandbox_tmpfs_size_mb
+            noexec_tmpfs = "noexec,nosuid,nodev,"
+            deps_path = settings.skill_deps_path
 
             wrapper_cmd = (
                 f"mount --bind {shlex.quote(str(sandbox_info.data_dir))} /mnt/data && "
@@ -197,8 +199,17 @@ class ProgrammaticService:
                 f"mount -t tmpfs -o size=1k tmpfs /app/dashboard && "
                 f"mount -t tmpfs -o size=1k tmpfs /app/src && "
                 f"mount --bind /var/lib/code-interpreter/empty_proc /proc && "
-                # BUG-007: Ephemeral /tmp — prevent cross-session data persistence
-                f"mount -t tmpfs -o size={tmpfs_size}m,mode=1777 tmpfs /tmp && "
+                # BUG-007: Ephemeral /tmp with noexec,nosuid,nodev
+                f"mount -t tmpfs -o {noexec_tmpfs}size={tmpfs_size}m,mode=1777 tmpfs /tmp && "
+                # BUG-008: Lock down other writable paths
+                f"mount -t tmpfs -o {noexec_tmpfs}size=1m,mode=1777 tmpfs /var/tmp && "
+                f"mount -t tmpfs -o {noexec_tmpfs}size=1m,mode=1777 tmpfs /run/lock && "
+                f"mount -t tmpfs -o {noexec_tmpfs}size=1m,mode=1733 tmpfs /var/lib/php/sessions && "
+                # BUG-008: skill-deps nosuid,nodev (not noexec — installed CLIs need exec)
+                f"(test -d {shlex.quote(deps_path)} && "
+                f"mount --bind {shlex.quote(deps_path)} {shlex.quote(deps_path)} && "
+                f"mount -o remount,bind,nosuid,nodev {shlex.quote(deps_path)} "
+                f"|| true) && "
                 f"{nsjail_cmd}"
             )
 

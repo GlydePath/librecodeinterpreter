@@ -30,7 +30,7 @@ services:
       # to the mounted files inside the container under /app/ssl.
       - ${SSL_CERTS_PATH:-./ssl}:/app/ssl:ro
     tmpfs:
-      - /tmp:size=512m,mode=1777
+      - /tmp:size=512m,mode=1777,noexec,nosuid,nodev
       - /app/data:size=100m
     depends_on:
       redis:
