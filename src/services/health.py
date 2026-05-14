@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 # Third-party imports
-import boto3
 import redis.asyncio as redis
 import structlog
 from botocore.exceptions import ClientError
@@ -224,13 +223,7 @@ class HealthCheckService:
 
         try:
             if not self._s3_client:
-                self._s3_client = boto3.client(
-                    "s3",
-                    endpoint_url=settings.s3.endpoint_url,
-                    aws_access_key_id=settings.s3_access_key,
-                    aws_secret_access_key=settings.s3_secret_key,
-                    region_name=settings.s3_region,
-                )
+                self._s3_client = settings.s3.make_client()
 
             loop = asyncio.get_event_loop()
             buckets_resp = await loop.run_in_executor(

@@ -4,7 +4,6 @@ import logging
 import shutil
 from typing import List, Dict, Any
 import redis
-import boto3
 from botocore.exceptions import ClientError
 
 from ..config import settings
@@ -124,13 +123,7 @@ class ConfigValidator:
     def _validate_s3_connection(self):
         """Validate S3 storage connection."""
         try:
-            client = boto3.client(
-                "s3",
-                endpoint_url=settings.s3.endpoint_url,
-                aws_access_key_id=settings.s3_access_key,
-                aws_secret_access_key=settings.s3_secret_key,
-                region_name=settings.s3_region,
-            )
+            client = settings.s3.make_client()
 
             # Test connection by listing buckets
             response = client.list_buckets()
