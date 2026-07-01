@@ -1,0 +1,28 @@
+name: Sync from upstream
+
+on:
+  schedule:
+    - cron: '0 2 * * 1'  # Every Monday 2am UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Sync from upstream
+        run: |
+          git remote add upstream https://github.com/usnavy13/LibreCodeInterpreter.git || true
+          git fetch upstream
+          git merge upstream/main --no-edit || echo "Merge conflict — manual resolution needed"
+
+      - name: Push if updated
+        run: |
+          git push origin main || echo "Nothing to push"
