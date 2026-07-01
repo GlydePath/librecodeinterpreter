@@ -1,0 +1,39 @@
+name: Build & Push to ECR
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: ap-southeast-2
+  ECR_REPO: glydepath/code-interpreter
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build & push
+        run: |
+          docker build \
+            -t ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:latest \
+            -t ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ github.sha }} \
+            .
+          docker push ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:latest
+          docker push ${{ steps.ecr.outputs.registry }}/${{ env.ECR_REPO }}:${{ github.sha }}
